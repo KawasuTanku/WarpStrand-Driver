@@ -783,6 +783,16 @@ class Driver:
             # Square" loop from the bug report.
             if self._rest_rejected and self.map.current == self.home:
                 return
+            # Optimistically mark resting the moment we SEND `rest` (not only on
+            # the server's confirmation line, which arrives a round-trip later).
+            # During that window a stray `room` echo from our recent history could
+            # flip map.current to a neighbor and make us walk away / re-issue rest
+            # — the "heal stops on occasion" transient. Pre-setting this lets the
+            # resting-room guard (and the goto/kill guards) shield us through the
+            # round-trip. A REJECTED line tears it back down and forces a resync
+            # `look`, so a genuine not-home desync is still surfaced.
+            self._resting_local = True
+            self._resting_room = self.map.current
             await self.send("rest")
             print("[act] rest (sent; waiting for server confirm)")
         elif verb == "say":
