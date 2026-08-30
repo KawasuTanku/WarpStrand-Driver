@@ -168,6 +168,7 @@ class Driver:
         self.delay = getattr(args, "delay", 0) or 0
         self.mob_room = getattr(args, "mob_room", "Cave")
         self.mob = getattr(args, "mob", "Cave Wyrm")
+        self.home = getattr(args, "home", "Town Square")
         self.look_interval = getattr(args, "look_interval", 10) or 10
         self.rules, self.map = rules, world_map
         self.world_name = "zen"
@@ -194,6 +195,24 @@ class Driver:
         self._look_task = None
         self._last_look = 0.0
         self._prev_room = None   # room occupied two arrivals ago (used by _moved_from echo guard)
+        # Move-then-verify: the room we EXPECT to be in after the in-flight move
+        # completes. The driver navigates off its LOCAL map belief, but the map
+        # can be wrong (a mislabeled exit, a stale edge learned from a flipped
+        # echo). If the server's actual arrival room differs from what we moved
+        # toward, we repair the bad edge and re-plan from the TRUE position
+        # instead of trusting a divergent belief and looping forever (e.g.
+        # thinking we're home in Town Square while the server says we're not, so
+        # every `rest` is rejected -> infinite spam loop). Set in _move(),
+        # consumed & cleared in the `room` handler.
+        self._expected_room = None
+        # True once we've issued a move and are awaiting the server's confirming
+        # `room` message to validate our navigation (see the `room` handler).
+        self._pendVERIFY_armed = False
+        # Rest rejection guard: once `rest` is rejected as "not in Town Square"
+        # (server disagrees with our local position), stop re-sending it every
+        # tick. Only cleared when a `room`/`stats` update proves we really ARE in
+        # Town Square, so we don't freeze HP at a low value forever.
+        self._rest_rejected = False
 
     async def send(self, text: str):
         await self._ws.send(json.dumps({"line": text}))
@@ -306,6 +325,49 @@ class Driver:
             self.creatures = obj.get("creatures", []) or []
             if changed:
                 self.map.save()
+            # If the wire says we're home (Town Square), our local belief now
+            # agrees with the server's authoritative position, so clear any prior
+            # "not in Town Square" rest-rejection guard. Done up here so it fires
+            # on EVERY arrival room message (including the mismatch-repair path
+            # below, where we `return` early) — otherwise a just-repaired map
+            # would still leave us thinking `rest` was rejected and we'd walk back
+            # to the mob half-healed instead of resting.
+            if name == self.home:
+                self._rest_rejected = False
+            # --- Move-then-verify (the fix for the endless rest/spam loop) ---
+            # We navigated off our LOCAL map belief. If the room the server says
+            # we actually arrived in is NOT the room we expected from that move,
+            # our local map has a wrong edge. Repair it now (drop the lying
+            # direction from where we moved FROM) so find_path() never believes
+            # it again, then re-decide from the TRUE position. Without this we'd
+            # keep trusting the bad edge and oscillate (e.g. Town Square<->East
+            # Field) forever.
+            if self._pendVERIFY_armed and name != self._expected_room:
+                from_room = self._moved_from if self._moved_from is not None else self._prev_room
+                if from_room and self._last_dir:
+                    bad = self.map.edges.get(from_room, {})
+                    if bad.get(self._last_dir) == name:
+                        del bad[self._last_dir]
+                        self.map.save()
+                        print(f"[nav] mismatch: moved {self._last_dir} from "
+                              f"{from_room!r} but server says we're in {name!r}; "
+                              f"repaired bad edge {from_room!r}->{self._last_dir}"
+                              f"->{name!r}")
+                # We are NOT where we thought; do not treat the stale belief as
+                # truth. Re-decide immediately from the real room so the next
+                # action uses correct context (and the move throttle is cleared
+                # below regardless).
+                self._expected_room = None
+                self._pendVERIFY_armed = False
+                self._pending_move = False
+                self._moved_from = None
+                await self._decide()
+                return
+            elif self._pendVERIFY_armed:
+                # Arrived exactly where expected: navigation was correct. Clear
+                # the verify latch and let the normal arrival bookkeeping run.
+                self._expected_room = None
+                self._pendVERIFY_armed = False
             # Arrival confirmed: this direction is now a known (tried) branch.
             if self._moved_from is not None and self._last_dir:
                 self._tried.add(f"{self._moved_from}|{self._last_dir}")
@@ -316,6 +378,13 @@ class Driver:
             await self._decide()
         elif ch == "stats":
             self.stats = obj
+            # The server's stats payload carries the authoritative room name
+            # ("room": ...). If the server says we're home, our local belief
+            # agrees -> allow `rest` to be (re-)sent by clearing any prior
+            # rejection guard. This is what eventually breaks the spam loop
+            # once we actually navigate back to Town Square.
+            if obj.get("room") == self.home:
+                self._rest_rejected = False
             # HP/stat view changed (e.g. the server's per-second `rest` heal tick).
             # Re-evaluate rules so rest-completion -> leave triggers promptly at the
             # configured $rest_hp threshold instead of stalling at 100%. The move
@@ -393,6 +462,17 @@ class Driver:
                     print(f"[rest] {text}")
                 elif "can only rest in town square" in low:
                     self._resting_local = False
+                    self._rest_rejected = True
+                    # We believe we're home but the server's room_id says otherwise.
+                    # Rather than freeze (rule 2 keeps matching on the stale local
+                    # belief and our reject-guard blocks `rest`), force a fresh
+                    # `room` payload from the server. That is authoritative and
+                    # resyncs self.map.current, so the next decide() navigates from
+                    # where we REALLY are instead of looping on a wrong belief.
+                    if self._ws is not None and not self._pending_move:
+                        await self.send("look")
+                        print(f"[rest] REJECTED -> forcing 'look' to resync "
+                              f"position (was {self.map.current!r})")
                     print(f"[rest] REJECTED (not in Town Square): {text}")
                 elif "already at full hp" in low:
                     self._resting_local = False
@@ -588,10 +668,12 @@ class Driver:
         self._resting_local = False   # moving interrupts rest (server-side too)
         self._moved_from = self.map.current
         self._last_dir = direction
-        # NOTE: we do NOT add to _tried here. A direction is only marked tried once
-        # the server confirms arrival (see the `room` handler), so a move that fails
-        # or gets throttled can be retried instead of permanently blocking the branch
-        # that leads somewhere new (e.g. toward the Cave).
+        # Arm move-then-verify: remember where we EXPECT to land per the local
+        # map, so the `room` handler can detect a divergence (wrong edge) and
+        # repair it. This is the core guard against the infinite navigation/
+        # rest loop.
+        self._expected_room = self.map.edges.get(self.map.current, {}).get(direction)
+        self._pendVERIFY_armed = True
 
     async def _run_action(self, acts: list[str]):
         verb = acts[0].lower() if acts else "look"
@@ -673,6 +755,14 @@ class Driver:
             # not actually in Town Square server-side) does NOT leave us believing
             # we're resting while HP stays frozen.
             if self._resting_local:
+                return
+            # If a prior `rest` was rejected because the server's position disagreed
+            # with our local belief (we thought we were home but weren't), don't
+            # spam `rest` every tick into a wall. Only retry once a `room`/`stats`
+            # message proves we really are in Town Square (which clears
+            # _rest_rejected). This breaks the infinite "REJECTED ... not in Town
+            # Square" loop from the bug report.
+            if self._rest_rejected and self.map.current == self.home:
                 return
             await self.send("rest")
             print("[act] rest (sent; waiting for server confirm)")
