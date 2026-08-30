@@ -205,15 +205,28 @@ class Driver:
         move) is issued, and does NOT push a room refresh on respawn. So while we
         sit in the mob's room with the mob absent, periodically `look` to catch
         the respawn and re-engage the kill rule."""
+        print(f"[respawn] watcher started: interval={self.look_interval}s "
+              f"mob={self.mob!r} room={self.mob_room!r}")
         while True:
             await asyncio.sleep(self.look_interval)
             try:
-                if (self._ws is None or self._pending_move
-                        or self.map.current != self.mob_room):
+                if self._ws is None:
+                    print("[respawn] skip: websocket not connected yet")
+                    continue
+                if self._pending_move:
+                    print("[respawn] skip: a move is in flight (throttle)")
+                    continue
+                if self.map.current != self.mob_room:
+                    print(f"[respawn] skip: not in mob room "
+                          f"(at {self.map.current!r}, want {self.mob_room!r})")
                     continue
                 names = self._creature_names(self.creatures)
                 if self.mob in names:
+                    print(f"[respawn] skip: {self.mob!r} already present "
+                          f"in {self.mob_room!r}")
                     continue  # mob present -> no need to probe
+                print(f"[respawn] mob {self.mob!r} absent in {self.mob_room!r}; "
+                      f"creatures seen={names}; sending 'look'")
                 await self.send("look")
                 self._last_look = time.time()
                 print(f"[respawn] looked for {self.mob} in {self.mob_room}")
@@ -748,6 +761,19 @@ def _dump_config(args, map_path: str) -> None:
         print(f"  {k.ljust(w)} = {v}")
 
 
+def _dump_rules(rules) -> None:
+    """Print the parsed rule list (order = evaluation order = firewall
+    priority) so the operator can verify the conditions/actions that will
+    actually drive behavior. First match wins, so ordering IS the priority —
+    a rule placed above another overrides it for any state both would match."""
+    print(f"[config] {len(rules)} rules loaded (evaluated top-to-bottom, "
+          f"first match wins):")
+    for i, r in enumerate(rules, 1):
+        conds = " ".join(r["conds"])
+        action = " ".join(r["action"])
+        print(f"  {i:>2}. when {conds} do {action}")
+
+
 async def main():
     args = parse_args()
     if not args.name or not args.password:
@@ -771,6 +797,7 @@ async def main():
                             f"map.{args.name}.json")
     wm = WorldMap(map_path)
     _dump_config(args, map_path)
+    _dump_rules(rules)
     await Driver(args, rules, wm).run()
 
 
