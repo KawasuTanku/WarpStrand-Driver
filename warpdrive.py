@@ -184,6 +184,7 @@ class Driver:
         self._pending_move = False
         self._moved_from = None
         self._last_dir = None
+        self._move_ts = 0.0   # time the in-flight move was sent (watchdog)
         self._tried = set()   # "room|dir" steps already attempted (exploration)
         self.rest_hp = int(getattr(args, "rest_hp", 95) or 95)  # heal-to threshold (%)
         self._resting_local = False  # we believe we are resting (server confirmed)
@@ -311,8 +312,14 @@ class Driver:
             # FROM, treat it as a stale echo: unblock the move throttle but do not
             # update our position or re-decide from the wrong room.
             if self._moved_from is not None and name == self._moved_from:
-                self._pending_move = False
-                self._moved_from = None
+                # This is the room we just LEFT, echoed back by the server before
+                # it sends the arrival room. It is NOT our new position, so ignore
+                # it entirely. Critically, do NOT clear the move throttle here:
+                # clearing it lets _decide() re-fire (on the post-move `stats`
+                # push) and double-move before arrival is confirmed, which flips
+                # our position belief and produces the endless "rest rejected: not
+                # in Town Square" bounce. The throttle is cleared only by the real
+                # arrival room (handled further down) or the stale-move watchdog.
                 return
             # NOTE: previously a second guard dropped any `room` whose name matched
             # the room we were settled in (a "late echo"). That guard only ever
@@ -628,6 +635,14 @@ class Driver:
         if self._pending_move:
             # We already issued a move; wait for the server's `room` message to
             # confirm arrival before deciding the next action (prevents move-spam).
+            # Watchdog: if no arrival room has shown up in a long time (the packet
+            # was dropped), free the throttle so we don't deadlock forever. A real
+            # arrival resets _pending_move well within this window.
+            if time.time() - self._move_ts > 5.0:
+                self._pending_move = False
+                self._moved_from = None
+                self._pendVERIFY_armed = False
+                print("[move] watchdog: no arrival within 5s; releasing throttle")
             return
         if not self._authed:
             self._authed = True
@@ -686,6 +701,7 @@ class Driver:
         # rest loop.
         self._expected_room = self.map.edges.get(self.map.current, {}).get(direction)
         self._pendVERIFY_armed = True
+        self._move_ts = time.time()
 
     async def _run_action(self, acts: list[str]):
         verb = acts[0].lower() if acts else "look"
