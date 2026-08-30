@@ -280,7 +280,21 @@ class Driver:
         elif ch == "error":
             print(f"[error] {obj.get('text')}")
         elif ch == "line":
-            pass  # narration; ignored
+            text = obj.get("text") or ""
+            if not text:
+                return
+            # Loot / drops arrive as narration lines (the server broadcasts kill
+            # results and roll_mob_loot() strings as `line` messages). Surface them
+            # so the driver's operator can see what was picked up. Lines that look
+            # like loot/drops are tagged [loot]; other narration is shown as [server]
+            # only when it mentions a reward, so routine flavor text stays quiet.
+            low = text.lower()
+            LOOT_WORDS = ("loot", "drop", "gain", "receive", "found", "obtain",
+                          "xp", "gold", "shard", "you get", "picked up")
+            if "dies" in low or "slain" in low:
+                print(f"[kill] {text}")
+            elif any(w in low for w in LOOT_WORDS):
+                print(f"[loot] {text}")
 
     # --- condition + action helpers ---
     @staticmethod
