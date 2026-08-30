@@ -235,6 +235,9 @@ class Driver:
                 if self._pending_move:
                     print("[respawn] skip: a move is in flight (throttle)")
                     continue
+                if self._resting_local:
+                    print("[respawn] skip: resting (in home, not mob room)")
+                    continue
                 if self.map.current != self.mob_room:
                     print(f"[respawn] skip: not in mob room "
                           f"(at {self.map.current!r}, want {self.mob_room!r})")
@@ -244,6 +247,15 @@ class Driver:
                     print(f"[respawn] skip: {self.mob!r} already present "
                           f"in {self.mob_room!r}")
                     continue  # mob present -> no need to probe
+                # Look backoff: don't probe again so soon after any other `look`
+                # (e.g. the death handler's immediate post-death probe). The server
+                # only lazy-respawns on `look`, and a single `look` per interval is
+                # enough to catch it — stacking probes in the death->respawn gap is
+                # just redundant spam that can interrupt the kill loop cadence.
+                if time.time() - self._last_look < self.look_interval:
+                    print(f"[respawn] skip: looked {time.time() - self._last_look:.0f}s "
+                          f"ago (within {self.look_interval}s backoff)")
+                    continue
                 print(f"[respawn] mob {self.mob!r} absent in {self.mob_room!r}; "
                       f"creatures seen={names}; sending 'look'")
                 await self.send("look")
