@@ -8,8 +8,10 @@
 # 1) Survival: if HP is critically low, run home and rest to recover.
 when hp-below 15 do retreat-rest "Town Square"
 
-# 2) While resting at home with low HP, keep resting until reasonably healed.
-when in "Town Square" and hp-below 80 do rest
+# 2) While resting at home with low HP, keep resting until nearly full so we
+#    don't march back to the mob half-healed. Rest until ~95% (the server's
+#    `rest` heals ~12%/sec, so this tops us off in a few seconds).
+when in "Town Square" and hp-below 95 do rest
 
 # 3) Train stats whenever we're in Town Square and have points banked.
 when in "Town Square" and has-stat-points do train str con dex
