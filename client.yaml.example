@@ -19,6 +19,8 @@ password: ""      # auto-login password
 # home: Town Square        # rest / retreat destination
 # train_room: Town Square
 # rest_hp: 95              # rest in Town Square until HP reaches this percent
+# retreat_hp: 50           # when HP drops below this (and we're not home), retreat
+#                         # home and heal — keeps us from grinding in the mob room
 # hp_floor: 0.25
 # look_interval: 10        # seconds between 'look' probes in the mob room (catches respawns)
 # script: warpdrive.script

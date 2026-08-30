@@ -4,16 +4,20 @@
 #             rest | retreat-rest "Room" | say "text" | look
 #
 # $tokens below are substituted from client.yaml / CLI flags at load time:
-#   $mob       -> mob: / --mob          (the target mob to kill)
-#   $mob_room  -> mob_room: / --mob-room (the room that mob lives in)
-#   $home      -> home: / --home        (rest / retreat destination; default Town Square)
-#   $rest_hp  -> rest_hp: / --rest-hp  (rest until HP reaches this percent)
+#   $mob        -> mob: / --mob          (the target mob to kill)
+#   $mob_room   -> mob_room: / --mob-room (the room that mob lives in)
+#   $home       -> home: / --home        (rest / retreat destination; default Town Square)
+#   $rest_hp    -> rest_hp: / --rest-hp  (rest until HP reaches this percent; default 95)
+#   $retreat_hp -> retreat_hp: / --retreat-hp (retreat home to heal below this; default 50)
 # Edit those in client.yaml instead of touching this file.
 #
 # Order matters: put the survival rules FIRST so they override fighting.
 
-# 1) Survival: if HP is critically low, run home and rest to recover.
-when hp-below 15 do retreat-rest "$home"
+# 1) If we're in the mob room and HP has dropped to the retreat threshold,
+#    haul back to Town Square and heal. Placed AFTER the kill rule so we keep
+#    fighting while the mob is actually present, but once it's dead (or we're
+#    just hurt) we go home instead of grinding into single digits.
+when hp-below $retreat_hp do retreat-rest "$home"
 
 # 2) While resting at home with low HP, keep resting until the rest_hp threshold
 #    (set via --rest-hp / 'rest_hp:' in client.yaml, default 95) so we don't

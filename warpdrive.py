@@ -186,12 +186,14 @@ class Driver:
         self._tried = set()   # "room|dir" steps already attempted (exploration)
         self.rest_hp = int(getattr(args, "rest_hp", 95) or 95)  # heal-to threshold (%)
         self._resting_local = False  # we believe we are resting (server confirmed)
+        self._resting_room = None    # room we rested in (spurious-echo guard)
         # Training guard: only re-send `train` when the banked stat_points count
         # changes (e.g. after more kills). Stops rule 3 from spamming train every
         # stats tick while sitting home with points already spent.
         self._trained_points = -1
         self._look_task = None
         self._last_look = 0.0
+        self._prev_room = None   # room occupied two arrivals ago (late-echo guard)
 
     async def send(self, text: str):
         await self._ws.send(json.dumps({"line": text}))
@@ -268,6 +270,22 @@ class Driver:
                 self._pending_move = False
                 self._moved_from = None
                 return
+            # A stale echo can ALSO arrive late -- after we've already moved on and
+            # cleared _moved_from. If we're not mid-move and this room is the one
+            # we occupied two arrivals ago (i.e. a step-back echo of where we just
+            # were), ignore it. Otherwise a late 'Forest' echo would flip our
+            # position out of the Cave we're actually standing in, corrupting both
+            # the map and the creature list (so the kill rule never fires and the
+            # goto rule no-ops with "already here").
+            if self._moved_from is None and self._prev_room is not None and name == self._prev_room:
+                return
+            # While we believe we're resting we cannot have moved, so any `room`
+            # for a *different* room is a spurious echo (the server can re-send a
+            # room from our recent history). Ignoring it stops a phantom flip of
+            # our position that would cancel the server heal and bounce us out of
+            # Town Square. We pin to the room we actually rested in.
+            if self._resting_local and name != self._resting_room:
+                return
             changed = self.map.observe(obj)
             self.creatures = obj.get("creatures", []) or []
             if changed:
@@ -276,6 +294,7 @@ class Driver:
             if self._moved_from is not None and self._last_dir:
                 self._tried.add(f"{self._moved_from}|{self._last_dir}")
             # Arrival confirmed: allow the next movement decision.
+            self._prev_room = self.map.current
             self._pending_move = False
             self._moved_from = None
             await self._decide()
@@ -355,15 +374,17 @@ class Driver:
     def _hp_ratio(self) -> float:
         hp, mh = self.stats.get("hp"), self.stats.get("maxhp")
         if not hp or not mh:
-            # Unknown HP: assume we're hurt so survival rules (rest/retreat) win
-            # and we don't wander off exploring as if we were full. Returning 1.0
-            # here previously made the driver treat a freshly-spawned, stat-less
-            # character as 100% HP and walk away from Town Square, canceling rest.
-            return 0.0
+            # Unknown HP: assume we're healthy so survival rules (rest/retreat)
+            # don't fire on a stale empty state at spawn -- we wait for the real
+            # stats packet (the server sends one on entry) before deciding to
+            # pull out of the mob room or rest. Returning 0.0 here previously made
+            # the driver retreat from the mob room at 88% the instant it logged in
+            # (before stats loaded), which is wrong: it should fight, not flee.
+            return 1.0
         try:
             return float(hp) / float(mh)
         except (TypeError, ValueError):
-            return 0.0
+            return 1.0
 
     def _explore_direction(self) -> str | None:
         """Pick a direction that expands our knowledge of the map toward the goal.
@@ -589,6 +610,7 @@ class Driver:
                 return
             await self.send("rest")
             self._resting_local = True
+            self._resting_room = self.map.current
             print("[act] rest (recover HP)")
         elif verb == "say":
             msg = " ".join(acts[1:])
@@ -633,6 +655,10 @@ def parse_args():
     p.add_argument("--train-room", default=os.getenv("WARP_TRAIN_ROOM", "Town Square"))
     p.add_argument("--rest-hp", type=int, default=int(os.getenv("WARP_REST_HP", "95")),
                    help="Rest in Town Square until HP reaches this percent (default 95).")
+    p.add_argument("--retreat-hp", type=int, default=int(os.getenv("WARP_RETREAT_HP", "50")),
+                   help="When HP drops below this percent and we're NOT home, retreat "
+                        "to $home and heal (default 50). Keeps the driver from grinding "
+                        "in the mob room down to single digits before healing.")
     p.add_argument("--look-interval", type=int, default=int(os.getenv("WARP_LOOK_INTERVAL", "10")),
                    help="Seconds between 'look' probes in the mob room to catch respawns "
                         "(server doesn't push a room refresh on respawn). Default 10.")
@@ -676,6 +702,8 @@ def parse_args():
         args.train_room = cfg.get("train_room", args.train_room)
     if args.rest_hp == int(os.getenv("WARP_REST_HP", "95")):
         args.rest_hp = int(cfg.get("rest_hp", args.rest_hp))
+    if args.retreat_hp == int(os.getenv("WARP_RETREAT_HP", "50")):
+        args.retreat_hp = int(cfg.get("retreat_hp", args.retreat_hp))
     if args.look_interval == int(os.getenv("WARP_LOOK_INTERVAL", "10")):
         args.look_interval = int(cfg.get("look_interval", args.look_interval))
     if args.hp_floor == float(os.getenv("WARP_HP_FLOOR", "0.25")):
@@ -699,6 +727,7 @@ async def main():
             "home": args.home,
             "train_room": args.train_room,
             "rest_hp": args.rest_hp,
+            "retreat_hp": args.retreat_hp,
         })
     if not rules:
         sys.exit("Script parsed to zero rules.")

@@ -46,7 +46,7 @@ $EDITOR ~/.config/warpstrand/client.yaml
 ```
 
 Optional flags: `--host`, `--port`, `--mob`, `--mob-room`, `--home`, `--train-room`,
-`--rest-hp`, `--hp-floor`, `--script PATH`, `--config PATH`, `--delay N`, `--tls`, `--no-verify`.
+`--rest-hp`, `--retreat-hp`, `--hp-floor`, `--script PATH`, `--config PATH`, `--delay N`, `--tls`, `--no-verify`.
 
 All of these (plus `tls`/`verify`) can also be set in `~/.config/warpstrand/client.yaml`
 under the same keys (e.g. `mob:`, `mob_room:`, `home:`, `rest_hp:`). CLI > yaml > env > default.
