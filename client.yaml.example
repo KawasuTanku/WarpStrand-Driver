@@ -16,5 +16,6 @@ password: ""      # auto-login password
 # --- warpdrive.py extras (optional; CLI/env also work) ---
 # mob: Cave Wyrm
 # train_room: Town Square
+# rest_hp: 95              # rest in Town Square until HP reaches this percent
 # hp_floor: 0.25
 # script: warpdrive.script

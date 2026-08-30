@@ -517,6 +517,8 @@ def parse_args():
     p.add_argument("--password", default=os.getenv("WARP_PASS", ""))
     p.add_argument("--mob", default=os.getenv("WARP_MOB", "Cave Wyrm"))
     p.add_argument("--train-room", default=os.getenv("WARP_TRAIN_ROOM", "Town Square"))
+    p.add_argument("--rest-hp", type=int, default=int(os.getenv("WARP_REST_HP", "95")),
+                   help="Rest in Town Square until HP reaches this percent (default 95).")
     p.add_argument("--hp-floor", type=float, default=float(os.getenv("WARP_HP_FLOOR", "0.25")))
     p.add_argument("--tls", action="store_true",
                    help="Connect over wss:// (TLS). Reads 'tls' from client.yaml if set.")
@@ -551,6 +553,8 @@ def parse_args():
         args.mob = cfg.get("mob", args.mob)
     if args.train_room == os.getenv("WARP_TRAIN_ROOM", "Town Square"):
         args.train_room = cfg.get("train_room", args.train_room)
+    if args.rest_hp == int(os.getenv("WARP_REST_HP", "95")):
+        args.rest_hp = int(cfg.get("rest_hp", args.rest_hp))
     if args.hp_floor == float(os.getenv("WARP_HP_FLOOR", "0.25")):
         args.hp_floor = float(cfg.get("hp_floor", args.hp_floor))
     if args.script == os.getenv("WARP_SCRIPT",
@@ -569,6 +573,7 @@ async def main():
         rules = parse_script(fh.read(), vars={
             "mob": args.mob,
             "train_room": args.train_room,
+            "rest_hp": args.rest_hp,
         })
     if not rules:
         sys.exit("Script parsed to zero rules.")
