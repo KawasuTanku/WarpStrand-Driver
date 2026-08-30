@@ -111,12 +111,12 @@ async def scenario():
     # 4) Start the watchdog and wait past rest_timeout with NO further stats.
     d._rest_watch_task = asyncio.create_task(d._rest_watch())
     await asyncio.sleep(d.rest_timeout * 2.5)  # > rest_timeout, no tick
-    # The watchdog must have nudged a `look` to surface state. `send` wraps the
-    # command as JSON {"line": "look"}, so check for that.
-    assert any('"look"' in s for s in ft.sent), \
-        f"watchdog must force a 'look' on stall; sent={ft.sent}"
+    # The watchdog must have nudged a `stats` command (NOT `look`) to pull a fresh
+    # stat block. `send` wraps the command as JSON {"line": "stats"}, so check for that.
+    assert any('"stats"' in s for s in ft.sent), \
+        f"watchdog must force a 'stats' command on stall; sent={ft.sent}"
 
-    # 5) Server answers the look with the authoritative (still-resting, 92%) room.
+    # 5) Server answers the `stats` command with a fresh stat block (still 92%).
     #    Re-decide runs; with hp 919/990 = 92% >= rest_hp 95? No -> still resting,
     #    but the watchdog loop is healthy (it will keep polling). To prove it does
     #    NOT freeze, feed one more heal tick to full and confirm it leaves rest.
@@ -135,7 +135,7 @@ async def scenario():
 
 def main():
     ok = asyncio.run(scenario())
-    print("PASS: rest-stall watchdog forces a 'look' on a missed heal tick and "
+    print("PASS: rest-stall watchdog forces a 'stats' command on a missed heal tick and "
           "clears resting at full HP — no 92% freeze.")
 
 

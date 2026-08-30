@@ -274,9 +274,16 @@ class Driver:
         per-second rest heal tick (the `stats` push that drives _decide) is
         dropped mid-rest. While we believe we're resting, if HP hasn't climbed
         toward full within `rest_timeout` seconds of the last stats update, the
-        heal tick stalled — force a `look` to surface the authoritative state and
-        re-decide. If full, the look confirms and _decide() clears _resting_local
-        so we march back to the mob."""
+        heal tick stalled — force a `stats` command to pull a fresh stat block
+        (HP climbing toward full) and re-decide. If full, the fresh stats confirm
+        and _decide() clears _resting_local so we march back to the mob.
+
+        NOTE: this sends the `stats` command, NOT `look`. `look` returns a `room`
+        frame, which the room handler pins/ignores while resting and does NOT
+        update the `stats` payload that _decide's HP check reads -- so a `look`
+        would never unstick the freeze. `stats` (session.py: cmd=="stats" ->
+        _push_stats) returns exactly the HP reading we need.
+        """
         while True:
             await asyncio.sleep(max(2.0, self.rest_timeout / 2.0))
             try:
@@ -289,9 +296,9 @@ class Driver:
                 stalled = (time.time() - self._rest_ts) > self.rest_timeout
                 if full or stalled:
                     if not self._pending_move:
-                        await self.send("look")
+                        await self.send("stats")
                         print(f"[rest] watchdog: HP={self._rest_hp}/{self._rest_maxhp} "
-                              f"stalled {time.time() - self._rest_ts:.0f}s -> 'look'")
+                              f"stalled {time.time() - self._rest_ts:.0f}s -> 'stats'")
                         await self._decide()
             except Exception as e:
                 print(f"[rest] watchdog error: {e}")
