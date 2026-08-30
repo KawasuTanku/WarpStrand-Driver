@@ -184,6 +184,8 @@ class Driver:
         self._moved_from = None
         self._last_dir = None
         self._tried = set()   # "room|dir" steps already attempted (exploration)
+        self.rest_hp = int(getattr(args, "rest_hp", 95) or 95)  # heal-to threshold (%)
+        self._resting_local = False  # we believe we are resting (server confirmed)
         self._look_task = None
         self._last_look = 0.0
 
@@ -271,12 +273,18 @@ class Driver:
             self._moved_from = None
             await self._decide()
         elif ch == "stats":
-            # Update HP/stat view, but do NOT re-decide here. Decisions only run
-            # on `room` messages (authoritative position). Acting on stats let the
-            # driver issue commands against a stale `current` room when a stats
-            # packet arrived before the room confirmation — causing it to send a
-            # move for the wrong room and drift from the server's real position.
             self.stats = obj
+            # HP/stat view changed (e.g. the server's per-second `rest` heal tick).
+            # Re-evaluate rules so rest-completion -> leave triggers promptly at the
+            # configured $rest_hp threshold instead of stalling at 100%. The move
+            # throttle (_pending_move) still blocks re-deciding mid-move, and
+            # clearing _decided_room prevents the same-room de-dupe from suppressing
+            # a re-check when only HP changed while standing still.
+            if self._hp_ratio() * 100 >= self.rest_hp:
+                # Healed enough (or the server stopped resting) -- allow re-engage.
+                self._resting_local = False
+            self._decided_room = None
+            await self._decide()
         elif ch == "error":
             print(f"[error] {obj.get('text')}")
         elif ch == "line":
@@ -300,7 +308,6 @@ class Driver:
             elif any(w in low for w in LOOT_WORDS):
                 print(f"[loot] {text}")
 
-    # --- condition + action helpers ---
     @staticmethod
     def _creature_names(creatures) -> list[str]:
         """Return mob names whether the server sends a list of dicts
@@ -477,6 +484,7 @@ class Driver:
         """Send a movement command and record bookkeeping for throttle/explore."""
         await self.send(direction)
         self._pending_move = True
+        self._resting_local = False   # moving interrupts rest (server-side too)
         self._moved_from = self.map.current
         self._last_dir = direction
         self._tried.add(f"{self.map.current}|{direction}")
@@ -524,13 +532,33 @@ class Driver:
             # `retreat-rest` is sugar: go to <room> first, then rest once there.
             if verb == "retreat-rest" and len(acts) > 1:
                 dest = acts[1]
-                dirs = self.map.find_path(self.map.current, dest)
-                if dirs:
-                    await self._move(dirs[0])
-                    print(f"[act] retreat-rest -> heading to {dest} ({dirs[0]})")
-                    return
-                # already at dest (or no path): fall through to rest
+                if self.map.current == dest:
+                    # Already home: don't call find_path (it can spuriously return
+                    # a path for the current room and make us walk AWAY instead of
+                    # resting -- which bounces Town Square <-> neighbors forever and
+                    # never actually heals). Fall straight through to rest.
+                    pass
+                else:
+                    dirs = self.map.find_path(self.map.current, dest)
+                    if dirs:
+                        await self._move(dirs[0])
+                        print(f"[act] retreat-rest -> heading to {dest} ({dirs[0]})")
+                        return
+                    # no path yet: step toward it (explore) instead of resting
+                    step = self._explore_direction()
+                    if step:
+                        await self._move(step)
+                        print(f"[act] retreat-rest -> heading to {dest}: exploring ({step})")
+                        return
+                # already at dest (or no path/exits): fall through to rest
+            # Don't re-send `rest` every tick: the server heals on a 1s poll that
+            # only fires when no command arrives; spamming `rest` resets that timer
+            # and deadlocks healing. Send once, then let the heal tick run and
+            # re-decide on the resulting `stats` until HP reaches $rest_hp.
+            if self._resting_local:
+                return
             await self.send("rest")
+            self._resting_local = True
             print("[act] rest (recover HP)")
         elif verb == "say":
             msg = " ".join(acts[1:])
