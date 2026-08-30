@@ -37,6 +37,9 @@ try:
 except ImportError:
     sys.exit("This script needs 'websockets': pip install websockets")
 
+# Reverse direction map (for synthesizing symmetric edges from server exits).
+REVERSE_DIR = {"n": "s", "s": "n", "e": "w", "w": "e", "u": "d", "d": "u"}
+
 
 # --------------------------------------------------------------------------
 # WorldMap: discovered room graph, persisted to JSON.
@@ -68,12 +71,23 @@ class WorldMap:
         name = room_msg.get("name")
         if not name:
             return False
+        prev_room = self.current
         self.current = name
         ex = {}
         for e in room_msg.get("exits", []):
             d, to = e.get("dir"), e.get("to")
             if d and to:
                 ex[d] = to
+        # Synthesize the reverse edge: coming FROM prev_room via direction d,
+        # the reverse direction from THIS room leads back to prev_room. This
+        # repairs asymmetric / mislabeled server exit names so BFS can always
+        # navigate back. (MUD rooms are bidirectional.)
+        if prev_room and prev_room in self.edges:
+            for d, nxt in list(self.edges.get(prev_room, {}).items()):
+                if nxt == name:
+                    rev = REVERSE_DIR.get(d)
+                    if rev and rev not in ex:
+                        ex[rev] = prev_room
         changed = name not in self.edges or self.edges[name] != ex
         self.edges[name] = ex
         return changed
@@ -140,6 +154,7 @@ class Driver:
         self.name, self.password = args.name, args.password
         self.tls = getattr(args, "tls", False)
         self.verify = getattr(args, "verify", True)
+        self.delay = getattr(args, "delay", 0) or 0
         self.rules, self.map = rules, world_map
         self.world_name = "zen"
         self.stats = {}
@@ -153,9 +168,13 @@ class Driver:
         # thrashes without ever "arriving" anywhere.
         self._pending_move = False
         self._moved_from = None
+        self._last_dir = None
+        self._tried = set()   # "room|dir" steps already attempted (exploration)
 
     async def send(self, text: str):
         await self._ws.send(json.dumps({"line": text}))
+        if self.delay:
+            await asyncio.sleep(self.delay)
 
     async def run(self):
         scheme = "wss" if self.tls else "ws"
@@ -192,6 +211,15 @@ class Driver:
             await self.send(self.password)
             print("[auth] password sent")
         elif ch == "room":
+            name = obj.get("name")
+            # The server echoes the room we just left BEFORE sending the new one
+            # (sometimes duplicated too). If this room is the one we just moved
+            # FROM, treat it as a stale echo: unblock the move throttle but do not
+            # update our position or re-decide from the wrong room.
+            if self._moved_from is not None and name == self._moved_from:
+                self._pending_move = False
+                self._moved_from = None
+                return
             changed = self.map.observe(obj)
             self.creatures = obj.get("creatures", []) or []
             if changed:
@@ -201,8 +229,12 @@ class Driver:
             self._moved_from = None
             await self._decide()
         elif ch == "stats":
+            # Update HP/stat view, but do NOT re-decide here. Decisions only run
+            # on `room` messages (authoritative position). Acting on stats let the
+            # driver issue commands against a stale `current` room when a stats
+            # packet arrived before the room confirmation — causing it to send a
+            # move for the wrong room and drift from the server's real position.
             self.stats = obj
-            await self._decide()
         elif ch == "error":
             print(f"[error] {obj.get('text')}")
         elif ch == "line":
@@ -244,30 +276,50 @@ class Driver:
     def _explore_direction(self) -> str | None:
         """Pick a direction that expands our knowledge of the map toward the goal.
 
-        Strategy:
-          1. If the current room has a neighbor we've never observed, step there
-             (learn that room's exits next).
-          2. Otherwise BFS the KNOWN graph to the nearest room that still has an
-             unexplored exit (a "frontier"), and return the first step toward it.
-             This keeps exploration expanding outward instead of oscillating
-             between two already-mapped rooms.
-          3. Fallback: any exit (shouldn't normally happen).
+        Systematic exploration so we never get stuck bouncing in a dead-end branch:
+          1. Among the current room's neighbors we have NOT yet visited, prefer one
+             whose destination is still an unknown room (unmapped). Skip a direction
+             we already stepped from here, and skip an immediate reverse of the last
+             move (so we don't ping-pong between two rooms).
+          2. If every neighbor here is already mapped, BFS the KNOWN graph to the
+             nearest room that still has an unexplored exit (a "frontier") and step
+             toward it. This expands outward until the goal becomes reachable.
+          3. Fallback: any exit we haven't tried yet, else None.
         Returns None if we have no exits at all.
         """
         cur = self.map.current
         exits = self.map.edges.get(cur, {})
         if not exits:
             return None
-        # 1) immediate unexplored neighbor
+        reverse = REVERSE_DIR.get(self._last_dir)
+
+        # 1) unexplored / untried neighbor, preferring a genuinely unknown room
+        candidates = []
         for d, nxt in exits.items():
+            if f"{cur}|{d}" in self._tried:
+                continue
             if nxt not in self.map.edges:
-                return d
-        # 2) BFS the known graph to the closest frontier room
+                # unknown room -> top priority (expands the map)
+                candidates.insert(0, d)
+            else:
+                candidates.append(d)
+        if candidates:
+            # avoid immediately reversing the last move unless it's the only choice
+            pick = candidates[0]
+            if reverse and len(candidates) > 1 and pick == reverse:
+                pick = candidates[1]
+            return pick
+
+        # 2) all neighbors here are mapped -> head to the nearest frontier
         step = self._frontier_step()
         if step:
             return step
-        # 3) fallback
-        return next(iter(exits.keys()))
+
+        # 3) fallback: any untried exit
+        for d in exits:
+            if f"{cur}|{d}" not in self._tried:
+                return d
+        return None
 
     def _frontier_step(self) -> str | None:
         """BFS known edges from current room to the nearest room that has an exit
@@ -306,6 +358,13 @@ class Driver:
         if not self._authed:
             self._authed = True
             print(f"[in-world] at {self.map.current!r}")
+        hp, mh = self.stats.get("hp"), self.stats.get("maxhp")
+        loc = f"[loc] {self.map.current}"
+        if hp is not None and mh is not None:
+            loc += f"  HP {hp}/{mh} ({int(self._hp_ratio()*100)}%)"
+        if self.creatures:
+            loc += f"  creatures={[c.get('name') for c in self.creatures]}"
+        print(loc)
         for rule in self.rules:
             conds = rule["conds"]
             self._active_conds = conds
@@ -340,6 +399,14 @@ class Driver:
                 await self._run_action(rule["action"])
                 return   # first match wins
 
+    async def _move(self, direction: str):
+        """Send a movement command and record bookkeeping for throttle/explore."""
+        await self.send(direction)
+        self._pending_move = True
+        self._moved_from = self.map.current
+        self._last_dir = direction
+        self._tried.add(f"{self.map.current}|{direction}")
+
     async def _run_action(self, acts: list[str]):
         verb = acts[0].lower() if acts else "look"
         if verb == "train":
@@ -352,10 +419,13 @@ class Driver:
                 return
             dirs = self.map.find_path(self.map.current, dest)
             if dirs:
-                await self.send(dirs[0])
-                self._pending_move = True
-                self._moved_from = self.map.current
+                await self._move(dirs[0])
                 print(f"[act] {verb} -> {dest} ({dirs[0]})")
+            elif self.map.current == dest:
+                # Already at the destination; do nothing (don't "explore" away
+                # from it — that caused an infinite Cave<->neighbor loop).
+                print(f"[act] {verb} -> {dest}: already here")
+                return
             else:
                 # No known path yet. `look` would teach us nothing (the server
                 # only sends a `room` message on actual movement), so step through
@@ -364,9 +434,7 @@ class Driver:
                 # goal becomes reachable.
                 step = self._explore_direction()
                 if step:
-                    await self.send(step)
-                    self._pending_move = True
-                    self._moved_from = self.map.current
+                    await self._move(step)
                     print(f"[act] {verb} -> {dest}: exploring ({step})")
                 else:
                     # Truly stuck (no exits at all from here): look as a fallback.
@@ -384,9 +452,7 @@ class Driver:
                 dest = acts[1]
                 dirs = self.map.find_path(self.map.current, dest)
                 if dirs:
-                    await self.send(dirs[0])
-                    self._pending_move = True
-                    self._moved_from = self.map.current
+                    await self._move(dirs[0])
                     print(f"[act] retreat-rest -> heading to {dest} ({dirs[0]})")
                     return
                 # already at dest (or no path): fall through to rest
@@ -437,6 +503,9 @@ def parse_args():
     here = os.path.dirname(os.path.abspath(__file__))
     p.add_argument("--script", default=os.getenv("WARP_SCRIPT",
                                                   os.path.join(here, "warpdrive.script")))
+    p.add_argument("--delay", type=float, default=float(os.getenv("WARP_DELAY", "0")),
+                   help="Seconds to wait after each command sent (pace a server "
+                        "that drops rapid commands). Default 0.")
     p.add_argument("--config", default=None,
                    help="YAML config (default: ~/.config/warpstrand/client.yaml)")
     args = p.parse_args()
