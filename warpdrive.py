@@ -296,7 +296,7 @@ class Driver:
             except Exception as e:
                 print(f"[rest] watchdog error: {e}")
 
-
+    async def run(self):
         scheme = "wss" if self.tls else "ws"
         uri = f"{scheme}://{self.host}:{self.port}"
         print(f"[connect] {uri} as {self.name}")
