@@ -194,6 +194,13 @@ class Driver:
         self._look_task = None
         self._last_look = 0.0
         self._prev_room = None   # room occupied two arrivals ago (late-echo guard)
+        # When we deliberately `look` to (re)probe for a respawn, the server
+        # answers with a `room` whose name equals the room we're already in.
+        # The late-echo guard (below) would mistake that fresh response for a
+        # stale echo and drop it -- losing the respawned mob from the creature
+        # list. Set this flag around our own `look` so the room handler knows to
+        # process that response instead of discarding it.
+        self._expect_look_room = False
 
     async def send(self, text: str):
         await self._ws.send(json.dumps({"line": text}))
@@ -227,6 +234,7 @@ class Driver:
                     continue  # mob present -> no need to probe
                 print(f"[respawn] mob {self.mob!r} absent in {self.mob_room!r}; "
                       f"creatures seen={names}; sending 'look'")
+                self._expect_look_room = True
                 await self.send("look")
                 self._last_look = time.time()
                 print(f"[respawn] looked for {self.mob} in {self.mob_room}")
@@ -291,7 +299,14 @@ class Driver:
             # the map and the creature list (so the kill rule never fires and the
             # goto rule no-ops with "already here").
             if self._moved_from is None and self._prev_room is not None and name == self._prev_room:
-                return
+                # A `look` we sent to probe for a respawn returns a `room` for the
+                # same room we're sitting in. That response carries the refreshed
+                # creature list (incl. a respawned mob), so process it instead of
+                # dropping it as a stale echo.
+                if self._expect_look_room:
+                    self._expect_look_room = False
+                else:
+                    return
             # While we believe we're resting we cannot have moved, so any `room`
             # for a *different* room is a spurious echo (the server can re-send a
             # room from our recent history). Ignoring it stops a phantom flip of
@@ -359,6 +374,16 @@ class Driver:
                     self.creatures = keep
                     print(f"[respawn] {', '.join(removed)} removed from local "
                           f"list on death; watcher will re-probe")
+                    # Probe immediately instead of waiting up to look_interval s:
+                    # send 'look' so the server's lazy respawn can surface the mob
+                    # (and the room handler will accept the response via
+                    # _expect_look_room). Only if we're actually in the mob room.
+                    if self.map.current == self.mob_room and self._ws is not None:
+                        self._expect_look_room = True
+                        await self.send("look")
+                        self._last_look = time.time()
+                        print(f"[respawn] immediate 'look' after death in "
+                              f"{self.mob_room!r}")
             elif "shard" in low:
                 # Capacity Shard is a special/universal drop (the only way to
                 # expand the storage ring) -- highlight it distinctly.
