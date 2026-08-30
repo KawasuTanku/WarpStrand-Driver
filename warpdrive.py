@@ -714,6 +714,40 @@ def parse_args():
     return args
 
 
+def _dump_config(args, map_path: str) -> None:
+    """Print the resolved startup configuration so the operator can verify what
+    was actually loaded (CLI > yaml > env > built-in default merge in
+    parse_args). The password is masked: we only reveal whether it resolved to a
+    non-empty value, never the secret itself."""
+    def mask(v):
+        if v is None or v == "":
+            return "<unset>"
+        return "*" * max(6, min(12, len(str(v))))
+    rows = [
+        ("host", args.host),
+        ("port", args.port),
+        ("name", args.name),
+        ("password", mask(args.password)),
+        ("mob", args.mob),
+        ("mob_room", args.mob_room),
+        ("home", args.home),
+        ("train_room", args.train_room),
+        ("rest_hp", f"{args.rest_hp}%"),
+        ("retreat_hp", f"{args.retreat_hp}%"),
+        ("look_interval", f"{args.look_interval}s"),
+        ("hp_floor", args.hp_floor),
+        ("tls", args.tls),
+        ("verify", args.verify),
+        ("delay", f"{args.delay}s"),
+        ("script", args.script),
+        ("map_path", map_path),
+    ]
+    w = max(len(k) for k, _ in rows)
+    print("[config] resolved startup variables:")
+    for k, v in rows:
+        print(f"  {k.ljust(w)} = {v}")
+
+
 async def main():
     args = parse_args()
     if not args.name or not args.password:
@@ -736,6 +770,7 @@ async def main():
     map_path = os.path.join(os.path.dirname(os.path.abspath(args.script)),
                             f"map.{args.name}.json")
     wm = WorldMap(map_path)
+    _dump_config(args, map_path)
     await Driver(args, rules, wm).run()
 
 
