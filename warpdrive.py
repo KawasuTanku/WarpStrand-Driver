@@ -290,9 +290,13 @@ class Driver:
             # only when it mentions a reward, so routine flavor text stays quiet.
             low = text.lower()
             LOOT_WORDS = ("loot", "drop", "gain", "receive", "found", "obtain",
-                          "xp", "gold", "shard", "you get", "picked up")
+                          "xp", "gold", "you get", "picked up")
             if "dies" in low or "slain" in low:
                 print(f"[kill] {text}")
+            elif "shard" in low:
+                # Capacity Shard is a special/universal drop (the only way to
+                # expand the storage ring) -- highlight it distinctly.
+                print(f"[shard] {text}")
             elif any(w in low for w in LOOT_WORDS):
                 print(f"[loot] {text}")
 
