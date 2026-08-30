@@ -214,6 +214,19 @@ class Driver:
         # tick. Only cleared when a `room`/`stats` update proves we really ARE in
         # Town Square, so we don't freeze HP at a low value forever.
         self._rest_rejected = False
+        # Rest-stall watchdog: while we believe we're resting, the server's
+        # per-second heal tick (a `stats` push) is the only thing that normally
+        # drives _decide() to notice HP is full. If that tick is dropped/missed,
+        # _resting_local stays True, the resting/kill/goto guards block all action,
+        # and we freeze at ~92% forever (the "heal stops on occasion" / hangs-at-92%
+        # bug). The watchdog watches the REAL hp from the last stats push and, if HP
+        # isn't climbing toward full within rest_timeout seconds, forces a `look`
+        # (which surfaces the authoritative state) and re-decides.
+        self._rest_hp = None         # last known hp (from stats)
+        self._rest_maxhp = None
+        self._rest_ts = 0.0          # time of last stats update while resting
+        self._rest_watch_task = None
+        self.rest_timeout = float(getattr(args, "rest_timeout", 15) or 15)  # rest-stall watchdog window (s)
 
     async def send(self, text: str):
         await self._ws.send(json.dumps({"line": text}))
@@ -256,7 +269,34 @@ class Driver:
             except Exception as e:
                 print(f"[respawn] error: {e}")
 
-    async def run(self):
+    async def _rest_watch(self) -> None:
+        """Background watchdog: prevents freezing at ~92% when the server's
+        per-second rest heal tick (the `stats` push that drives _decide) is
+        dropped mid-rest. While we believe we're resting, if HP hasn't climbed
+        toward full within `rest_timeout` seconds of the last stats update, the
+        heal tick stalled — force a `look` to surface the authoritative state and
+        re-decide. If full, the look confirms and _decide() clears _resting_local
+        so we march back to the mob."""
+        while True:
+            await asyncio.sleep(max(2.0, self.rest_timeout / 2.0))
+            try:
+                if self._ws is None or not self._resting_local:
+                    continue
+                # Not full yet AND the last stats update is older than the stall
+                # window -> the heal tick stopped arriving. Nudge the server.
+                full = (self._rest_maxhp and self._rest_hp is not None
+                        and self._rest_hp >= self._rest_maxhp)
+                stalled = (time.time() - self._rest_ts) > self.rest_timeout
+                if full or stalled:
+                    if not self._pending_move:
+                        await self.send("look")
+                        print(f"[rest] watchdog: HP={self._rest_hp}/{self._rest_maxhp} "
+                              f"stalled {time.time() - self._rest_ts:.0f}s -> 'look'")
+                        await self._decide()
+            except Exception as e:
+                print(f"[rest] watchdog error: {e}")
+
+
         scheme = "wss" if self.tls else "ws"
         uri = f"{scheme}://{self.host}:{self.port}"
         print(f"[connect] {uri} as {self.name}")
@@ -275,6 +315,7 @@ class Driver:
             self._ws = ws
             await self.send(self.name)   # server reads name as the first line
             self._look_task = asyncio.create_task(self._respawn_watch())
+            self._rest_watch_task = asyncio.create_task(self._rest_watch())
             try:
                 async for raw in ws:
                     try:
@@ -286,6 +327,9 @@ class Driver:
                 if self._look_task is not None:
                     self._look_task.cancel()
                     self._look_task = None
+                if self._rest_watch_task is not None:
+                    self._rest_watch_task.cancel()
+                    self._rest_watch_task = None
 
     async def _on_message(self, obj: dict):
         ch = obj.get("ch")
@@ -388,6 +432,19 @@ class Driver:
             await self._decide()
         elif ch == "stats":
             self.stats = obj
+            # Track real HP for the rest-stall watchdog: if we believe we're resting
+            # and the per-second heal `stats` tick stops arriving, _rest_ts goes
+            # stale and the watchdog will nudge a `look`.
+            if self._resting_local:
+                hp = obj.get("hp")
+                maxhp = obj.get("maxhp")
+                if hp is not None and maxhp is not None:
+                    try:
+                        self._rest_hp = int(hp)
+                        self._rest_maxhp = int(maxhp)
+                        self._rest_ts = time.time()
+                    except (TypeError, ValueError):
+                        pass
             # The server's stats payload carries the authoritative room name
             # ("room": ...). If the server says we're home, our local belief
             # agrees -> allow `rest` to be (re-)sent by clearing any prior
@@ -845,6 +902,10 @@ def parse_args():
     p.add_argument("--look-interval", type=int, default=int(os.getenv("WARP_LOOK_INTERVAL", "10")),
                    help="Seconds between 'look' probes in the mob room to catch respawns "
                         "(server doesn't push a room refresh on respawn). Default 10.")
+    p.add_argument("--rest-timeout", type=float, default=float(os.getenv("WARP_REST_TIMEOUT", "15")),
+                   help="Seconds without a server rest-heal tick (stats push) while we believe "
+                        "we're resting before the watchdog nudges a 'look' to unstick a freeze "
+                        "(e.g. hangs at ~92%%). Default 15.")
     p.add_argument("--hp-floor", type=float, default=float(os.getenv("WARP_HP_FLOOR", "0.25")))
     p.add_argument("--tls", action="store_true",
                    help="Connect over wss:// (TLS). Reads 'tls' from client.yaml if set.")
