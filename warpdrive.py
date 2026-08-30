@@ -127,8 +127,16 @@ _TOKEN = re.compile(r'"[^"]*"|[\w%-]+')
 def _strip_quotes(tok: str) -> str:
     return tok[1:-1] if tok.startswith('"') and tok.endswith('"') else tok
 
-def parse_script(text: str) -> list[dict]:
-    """Parse the rules script into a list of {"conds":[...], "action":(...),}."""
+def parse_script(text: str, vars: dict | None = None) -> list[dict]:
+    """Parse the rules script into a list of {"conds":[...], "action":(...),}.
+
+    Tokens of the form $NAME (e.g. $mob, $train_room) are substituted from `vars`
+    before parsing, so the script can reference the configured mob / train room
+    instead of hardcoding them. Unknown $tokens are left as-is.
+    """
+    if vars:
+        for k, v in vars.items():
+            text = text.replace(f"${k}", str(v))
     rules = []
     for raw in text.splitlines():
         line = raw.strip()
@@ -241,6 +249,20 @@ class Driver:
             pass  # narration; ignored
 
     # --- condition + action helpers ---
+    @staticmethod
+    def _creature_names(creatures) -> list[str]:
+        """Return mob names whether the server sends a list of dicts
+        ({"name": ...}) or a list of plain strings."""
+        names = []
+        for c in creatures or []:
+            if isinstance(c, dict):
+                n = c.get("name")
+                if n:
+                    names.append(n)
+            elif isinstance(c, str):
+                names.append(c)
+        return names
+
     def _cond(self, tok: str) -> bool:
         if tok == "always":
             return True
@@ -363,7 +385,7 @@ class Driver:
         if hp is not None and mh is not None:
             loc += f"  HP {hp}/{mh} ({int(self._hp_ratio()*100)}%)"
         if self.creatures:
-            loc += f"  creatures={[c.get('name') for c in self.creatures]}"
+            loc += f"  creatures={self._creature_names(self.creatures)}"
         print(loc)
         for rule in self.rules:
             conds = rule["conds"]
@@ -391,7 +413,7 @@ class Driver:
                     ok = ok and self.map.current == conds[i]
                 elif kw == "mob":
                     i += 1
-                    ok = ok and any(c.get("name") == conds[i] for c in self.creatures)
+                    ok = ok and conds[i] in self._creature_names(self.creatures)
                 else:
                     ok = False
                 i += 1
@@ -544,7 +566,10 @@ async def main():
     if not os.path.exists(args.script):
         sys.exit(f"No script at {args.script}")
     with open(args.script) as fh:
-        rules = parse_script(fh.read())
+        rules = parse_script(fh.read(), vars={
+            "mob": args.mob,
+            "train_room": args.train_room,
+        })
     if not rules:
         sys.exit("Script parsed to zero rules.")
     print(f"[script] {len(rules)} rules loaded")

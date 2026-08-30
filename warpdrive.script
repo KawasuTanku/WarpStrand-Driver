@@ -14,10 +14,12 @@ when in "Town Square" and hp-below 80 do rest
 # 3) Train stats whenever we're in Town Square and have points banked.
 when in "Town Square" and has-stat-points do train str con dex
 
-# 4) Fight the target mob if it's here and we're healthy enough.
-when mob "Cave Wyrm" and hp-above 25 do kill "Cave Wyrm"
+# 4) Fight the target mob if it's here. The mob name comes from --mob / the
+#    'mob:' config value (substituted into $mob below); change it there instead
+#    of editing this rule. No hp-above gate: the hp-below 15 rule above already
+#    pulls us home to rest before we get that low, so we always fight when able.
+when mob "$mob" do kill "$mob"
 
 # Otherwise head to the mob's room (BFS over the discovered map).
-# Cave Wyrm lives in the Cave (room 9) in the build_world.py layout; adjust to
-# match your world's mob spawn if you use a different seed.
+# Set the room name via --mob config / the 'mob room' if your world differs.
 when always do goto "Cave"
