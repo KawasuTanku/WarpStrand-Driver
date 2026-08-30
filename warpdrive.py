@@ -186,6 +186,10 @@ class Driver:
         self._tried = set()   # "room|dir" steps already attempted (exploration)
         self.rest_hp = int(getattr(args, "rest_hp", 95) or 95)  # heal-to threshold (%)
         self._resting_local = False  # we believe we are resting (server confirmed)
+        # Training guard: only re-send `train` when the banked stat_points count
+        # changes (e.g. after more kills). Stops rule 3 from spamming train every
+        # stats tick while sitting home with points already spent.
+        self._trained_points = -1
         self._look_task = None
         self._last_look = 0.0
 
@@ -492,9 +496,13 @@ class Driver:
     async def _run_action(self, acts: list[str]):
         verb = acts[0].lower() if acts else "look"
         if verb == "train":
+            have = int(self.stats.get("stat_points", 0) or 0)
+            if have == self._trained_points:
+                return  # already trained this bank; wait for more points
             for stat in acts[1:]:
                 await self.send(f"train {stat}")
-            print(f"[act] train {acts[1:]}")
+            self._trained_points = have
+            print(f"[act] train {acts[1:]} ({have} pts)")
         elif verb == "goto" or verb == "retreat":
             dest = acts[1] if len(acts) > 1 else None
             if not dest:
