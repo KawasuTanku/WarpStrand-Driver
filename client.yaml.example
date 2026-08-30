@@ -15,6 +15,8 @@ password: ""      # auto-login password
 
 # --- warpdrive.py extras (optional; CLI/env also work) ---
 # mob: Cave Wyrm
+# mob_room: Cave            # room the mob lives in (goto target)
+# home: Town Square        # rest / retreat destination
 # train_room: Town Square
 # rest_hp: 95              # rest in Town Square until HP reaches this percent
 # hp_floor: 0.25

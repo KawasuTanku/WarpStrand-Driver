@@ -135,8 +135,10 @@ def parse_script(text: str, vars: dict | None = None) -> list[dict]:
     instead of hardcoding them. Unknown $tokens are left as-is.
     """
     if vars:
-        for k, v in vars.items():
-            text = text.replace(f"${k}", str(v))
+        # Replace longest tokens first so e.g. $mob_room is substituted before
+        # $mob (which is a prefix of it) would otherwise orphan the "_room" tail.
+        for k in sorted(vars, key=lambda x: len(x), reverse=True):
+            text = text.replace(f"${k}", str(vars[k]))
     rules = []
     for raw in text.splitlines():
         line = raw.strip()
@@ -516,6 +518,10 @@ def parse_args():
     p.add_argument("--name", default=os.getenv("WARP_NAME", ""))
     p.add_argument("--password", default=os.getenv("WARP_PASS", ""))
     p.add_argument("--mob", default=os.getenv("WARP_MOB", "Cave Wyrm"))
+    p.add_argument("--mob-room", default=os.getenv("WARP_MOB_ROOM", "Cave"),
+                   help="Room the target mob lives in (default 'Cave').")
+    p.add_argument("--home", default=os.getenv("WARP_HOME", "Town Square"),
+                   help="Rest / retreat destination (default 'Town Square').")
     p.add_argument("--train-room", default=os.getenv("WARP_TRAIN_ROOM", "Town Square"))
     p.add_argument("--rest-hp", type=int, default=int(os.getenv("WARP_REST_HP", "95")),
                    help="Rest in Town Square until HP reaches this percent (default 95).")
@@ -551,6 +557,10 @@ def parse_args():
         args.password = cfg.get("password", "")
     if args.mob == os.getenv("WARP_MOB", "Cave Wyrm"):
         args.mob = cfg.get("mob", args.mob)
+    if args.mob_room == os.getenv("WARP_MOB_ROOM", "Cave"):
+        args.mob_room = cfg.get("mob_room", args.mob_room)
+    if args.home == os.getenv("WARP_HOME", "Town Square"):
+        args.home = cfg.get("home", args.home)
     if args.train_room == os.getenv("WARP_TRAIN_ROOM", "Town Square"):
         args.train_room = cfg.get("train_room", args.train_room)
     if args.rest_hp == int(os.getenv("WARP_REST_HP", "95")):
@@ -572,6 +582,8 @@ async def main():
     with open(args.script) as fh:
         rules = parse_script(fh.read(), vars={
             "mob": args.mob,
+            "mob_room": args.mob_room,
+            "home": args.home,
             "train_room": args.train_room,
             "rest_hp": args.rest_hp,
         })

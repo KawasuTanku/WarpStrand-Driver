@@ -3,25 +3,28 @@
 # Actions:    train str con dex | goto "Room" | kill "Mob" | retreat "Room" |
 #             rest | retreat-rest "Room" | say "text" | look
 #
+# $tokens below are substituted from client.yaml / CLI flags at load time:
+#   $mob       -> mob: / --mob          (the target mob to kill)
+#   $mob_room  -> mob_room: / --mob-room (the room that mob lives in)
+#   $home      -> home: / --home        (rest / retreat destination; default Town Square)
+#   $rest_hp  -> rest_hp: / --rest-hp  (rest until HP reaches this percent)
+# Edit those in client.yaml instead of touching this file.
+#
 # Order matters: put the survival rules FIRST so they override fighting.
 
 # 1) Survival: if HP is critically low, run home and rest to recover.
-when hp-below 15 do retreat-rest "Town Square"
+when hp-below 15 do retreat-rest "$home"
 
 # 2) While resting at home with low HP, keep resting until the rest_hp threshold
 #    (set via --rest-hp / 'rest_hp:' in client.yaml, default 95) so we don't
 #    march back to the mob half-healed. The server's `rest` heals ~12%/sec.
-when in "Town Square" and hp-below $rest_hp do rest
+when in "$home" and hp-below $rest_hp do rest
 
-# 3) Train stats whenever we're in Town Square and have points banked.
-when in "Town Square" and has-stat-points do train str con dex
+# 3) Train stats whenever we're home and have points banked.
+when in "$home" and has-stat-points do train str con dex
 
-# 4) Fight the target mob if it's here. The mob name comes from --mob / the
-#    'mob:' config value (substituted into $mob below); change it there instead
-#    of editing this rule. No hp-above gate: the hp-below 15 rule above already
-#    pulls us home to rest before we get that low, so we always fight when able.
+# 4) Fight the target mob if it's here.
 when mob "$mob" do kill "$mob"
 
 # Otherwise head to the mob's room (BFS over the discovered map).
-# Set the room name via --mob config / the 'mob room' if your world differs.
-when always do goto "Cave"
+when always do goto "$mob_room"

@@ -45,11 +45,11 @@ $EDITOR ~/.config/warpstrand/client.yaml
 .venv/bin/python warpdrive.py --name YOURNAME --password YOURPASS
 ```
 
-Optional flags: `--host`, `--port`, `--mob`, `--train-room`, `--rest-hp`, `--hp-floor`,
-`--script PATH`, `--config PATH`, `--delay N`, `--tls`, `--no-verify`.
+Optional flags: `--host`, `--port`, `--mob`, `--mob-room`, `--home`, `--train-room`,
+`--rest-hp`, `--hp-floor`, `--script PATH`, `--config PATH`, `--delay N`, `--tls`, `--no-verify`.
 
 All of these (plus `tls`/`verify`) can also be set in `~/.config/warpstrand/client.yaml`
-under the same keys (e.g. `mob:`, `train_room:`, `rest_hp:`). CLI > yaml > env > default.
+under the same keys (e.g. `mob:`, `mob_room:`, `home:`, `rest_hp:`). CLI > yaml > env > default.
 
 ### TLS / wss:// servers
 
