@@ -272,6 +272,9 @@ class Driver:
             self.creatures = obj.get("creatures", []) or []
             if changed:
                 self.map.save()
+            # Arrival confirmed: this direction is now a known (tried) branch.
+            if self._moved_from is not None and self._last_dir:
+                self._tried.add(f"{self._moved_from}|{self._last_dir}")
             # Arrival confirmed: allow the next movement decision.
             self._pending_move = False
             self._moved_from = None
@@ -352,11 +355,15 @@ class Driver:
     def _hp_ratio(self) -> float:
         hp, mh = self.stats.get("hp"), self.stats.get("maxhp")
         if not hp or not mh:
-            return 1.0
+            # Unknown HP: assume we're hurt so survival rules (rest/retreat) win
+            # and we don't wander off exploring as if we were full. Returning 1.0
+            # here previously made the driver treat a freshly-spawned, stat-less
+            # character as 100% HP and walk away from Town Square, canceling rest.
+            return 0.0
         try:
             return float(hp) / float(mh)
         except (TypeError, ValueError):
-            return 1.0
+            return 0.0
 
     def _explore_direction(self) -> str | None:
         """Pick a direction that expands our knowledge of the map toward the goal.
@@ -420,9 +427,14 @@ class Driver:
                     continue
                 seen.add(nxt)
                 prev[nxt] = (r, d)
-                # Is nxt a frontier (has an exit to an unknown room)?
-                if any(e not in self.map.edges
-                       for e in self.map.edges.get(nxt, {}).values()):
+                # Is nxt a frontier? Either it has an exit to a room we haven't
+                # mapped yet, OR we've never actually arrived there (empty edges),
+                # so stepping toward it expands the map. This is what lets the
+                # driver discover the Cave branch after a map wipe instead of
+                # bouncing between already-mapped dead-ends.
+                nxt_edges = self.map.edges.get(nxt)
+                if nxt_edges is None or not nxt_edges or any(
+                        e not in self.map.edges for e in nxt_edges.values()):
                     room = nxt
                     path = []
                     while room != start:
@@ -491,7 +503,10 @@ class Driver:
         self._resting_local = False   # moving interrupts rest (server-side too)
         self._moved_from = self.map.current
         self._last_dir = direction
-        self._tried.add(f"{self.map.current}|{direction}")
+        # NOTE: we do NOT add to _tried here. A direction is only marked tried once
+        # the server confirms arrival (see the `room` handler), so a move that fails
+        # or gets throttled can be retried instead of permanently blocking the branch
+        # that leads somewhere new (e.g. toward the Cave).
 
     async def _run_action(self, acts: list[str]):
         verb = acts[0].lower() if acts else "look"
@@ -504,6 +519,10 @@ class Driver:
             self._trained_points = have
             print(f"[act] train {acts[1:]} ({have} pts)")
         elif verb == "goto" or verb == "retreat":
+            # Never walk away while we believe we're resting: leaving cancels the
+            # server's rest (and its heal), and we'd just bounce back — freezing HP.
+            if self._resting_local:
+                return
             dest = acts[1] if len(acts) > 1 else None
             if not dest:
                 return
@@ -531,6 +550,9 @@ class Driver:
                     await self.send("look")
                     print(f"[act] {verb} -> {dest}: no path, no exits; looking")
         elif verb == "kill":
+            # Don't start a fight while resting (combat cancels the server heal).
+            if self._resting_local:
+                return
             target = acts[1] if len(acts) > 1 else None
             if target:
                 await self.send(f"kill {target}")
