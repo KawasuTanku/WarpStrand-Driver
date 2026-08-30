@@ -48,6 +48,23 @@ $EDITOR ~/.config/warpstrand/client.yaml
 Optional flags: `--host`, `--port`, `--mob`, `--train-room`, `--hp-floor`,
 `--script PATH`, `--config PATH`.
 
+### TLS / wss:// servers
+
+If your server speaks TLS, add it to `client.yaml`:
+
+```yaml
+host: your.server.example
+port: 443
+tls: true
+# verify: false   # uncomment for a self-signed / internal-CA certificate
+```
+
+Or pass `--tls` (and `--no-verify` to skip certificate checks):
+
+```bash
+.venv/bin/python warpdrive.py --tls --no-verify --name YOURNAME --password YOURPASS
+```
+
 ## The rules script
 
 Edit `warpdrive.script` (or pass `--script`). Example:

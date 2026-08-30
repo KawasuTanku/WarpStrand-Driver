@@ -138,6 +138,8 @@ class Driver:
     def __init__(self, args, rules, world_map):
         self.host, self.port = args.host, args.port
         self.name, self.password = args.name, args.password
+        self.tls = getattr(args, "tls", False)
+        self.verify = getattr(args, "verify", True)
         self.rules, self.map = rules, world_map
         self.world_name = "zen"
         self.stats = {}
@@ -156,9 +158,21 @@ class Driver:
         await self._ws.send(json.dumps({"line": text}))
 
     async def run(self):
-        uri = f"ws://{self.host}:{self.port}"
+        scheme = "wss" if self.tls else "ws"
+        uri = f"{scheme}://{self.host}:{self.port}"
         print(f"[connect] {uri} as {self.name}")
-        async with websockets.connect(uri) as ws:
+        kwargs = {}
+        if self.tls:
+            import ssl
+            if self.verify:
+                kwargs["ssl"] = ssl.create_default_context()
+            else:
+                # Skip certificate verification (self-signed / internal CA).
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                kwargs["ssl"] = ctx
+        async with websockets.connect(uri, **kwargs) as ws:
             self._ws = ws
             await self.send(self.name)   # server reads name as the first line
             async for raw in ws:
@@ -416,6 +430,10 @@ def parse_args():
     p.add_argument("--mob", default=os.getenv("WARP_MOB", "Cave Wyrm"))
     p.add_argument("--train-room", default=os.getenv("WARP_TRAIN_ROOM", "Town Square"))
     p.add_argument("--hp-floor", type=float, default=float(os.getenv("WARP_HP_FLOOR", "0.25")))
+    p.add_argument("--tls", action="store_true",
+                   help="Connect over wss:// (TLS). Reads 'tls' from client.yaml if set.")
+    p.add_argument("--no-verify", dest="verify", action="store_false",
+                   help="Do not verify the TLS certificate (self-signed / internal CA).")
     here = os.path.dirname(os.path.abspath(__file__))
     p.add_argument("--script", default=os.getenv("WARP_SCRIPT",
                                                   os.path.join(here, "warpdrive.script")))
@@ -426,6 +444,10 @@ def parse_args():
     # Merge credentials from client.yaml.
     # Precedence: CLI arg (if explicitly set) > yaml > env > built-in default.
     cfg = _load_config(args.config)
+    if not args.tls:
+        args.tls = bool(cfg.get("tls", False))
+    if args.verify and not cfg.get("verify", True):
+        args.verify = False
     if args.host == os.getenv("WARP_HOST", "127.0.0.1"):
         args.host = cfg.get("host", args.host)
     if args.port == int(os.getenv("WARP_PORT", "4000")):

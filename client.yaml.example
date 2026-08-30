@@ -9,6 +9,10 @@ name: ""          # auto-login username (leave empty to pass via CLI/env)
 password: ""      # auto-login password
 # theme: warpstrand_client/bloodmud.yaml   # ignored by the driver
 
+# --- TLS (for a wss:// server) ---
+# tls: true            # connect over wss:// instead of ws://
+# verify: false        # skip cert verification (self-signed / internal CA)
+
 # --- warpdrive.py extras (optional; CLI/env also work) ---
 # mob: Cave Wyrm
 # train_room: Town Square
