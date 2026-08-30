@@ -20,4 +20,5 @@ password: ""      # auto-login password
 # train_room: Town Square
 # rest_hp: 95              # rest in Town Square until HP reaches this percent
 # hp_floor: 0.25
+# look_interval: 10        # seconds between 'look' probes in the mob room (catches respawns)
 # script: warpdrive.script

@@ -31,6 +31,7 @@ import json
 import os
 import re
 import sys
+import time
 
 try:
     import websockets
@@ -165,6 +166,9 @@ class Driver:
         self.tls = getattr(args, "tls", False)
         self.verify = getattr(args, "verify", True)
         self.delay = getattr(args, "delay", 0) or 0
+        self.mob_room = getattr(args, "mob_room", "Cave")
+        self.mob = getattr(args, "mob", "Cave Wyrm")
+        self.look_interval = getattr(args, "look_interval", 10) or 10
         self.rules, self.map = rules, world_map
         self.world_name = "zen"
         self.stats = {}
@@ -180,11 +184,33 @@ class Driver:
         self._moved_from = None
         self._last_dir = None
         self._tried = set()   # "room|dir" steps already attempted (exploration)
+        self._look_task = None
+        self._last_look = 0.0
 
     async def send(self, text: str):
         await self._ws.send(json.dumps({"line": text}))
         if self.delay:
             await asyncio.sleep(self.delay)
+
+    async def _respawn_watch(self) -> None:
+        """Background task: the server lazy-respawns mobs only when `look` (or a
+        move) is issued, and does NOT push a room refresh on respawn. So while we
+        sit in the mob's room with the mob absent, periodically `look` to catch
+        the respawn and re-engage the kill rule."""
+        while True:
+            await asyncio.sleep(self.look_interval)
+            try:
+                if (self._ws is None or self._pending_move
+                        or self.map.current != self.mob_room):
+                    continue
+                names = self._creature_names(self.creatures)
+                if self.mob in names:
+                    continue  # mob present -> no need to probe
+                await self.send("look")
+                self._last_look = time.time()
+                print(f"[respawn] looked for {self.mob} in {self.mob_room}")
+            except Exception as e:
+                print(f"[respawn] error: {e}")
 
     async def run(self):
         scheme = "wss" if self.tls else "ws"
@@ -204,12 +230,18 @@ class Driver:
         async with websockets.connect(uri, **kwargs) as ws:
             self._ws = ws
             await self.send(self.name)   # server reads name as the first line
-            async for raw in ws:
-                try:
-                    obj = json.loads(raw) if isinstance(raw, str) else raw
-                except (json.JSONDecodeError, TypeError):
-                    continue
-                await self._on_message(obj)
+            self._look_task = asyncio.create_task(self._respawn_watch())
+            try:
+                async for raw in ws:
+                    try:
+                        obj = json.loads(raw) if isinstance(raw, str) else raw
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    await self._on_message(obj)
+            finally:
+                if self._look_task is not None:
+                    self._look_task.cancel()
+                    self._look_task = None
 
     async def _on_message(self, obj: dict):
         ch = obj.get("ch")
@@ -525,6 +557,9 @@ def parse_args():
     p.add_argument("--train-room", default=os.getenv("WARP_TRAIN_ROOM", "Town Square"))
     p.add_argument("--rest-hp", type=int, default=int(os.getenv("WARP_REST_HP", "95")),
                    help="Rest in Town Square until HP reaches this percent (default 95).")
+    p.add_argument("--look-interval", type=int, default=int(os.getenv("WARP_LOOK_INTERVAL", "10")),
+                   help="Seconds between 'look' probes in the mob room to catch respawns "
+                        "(server doesn't push a room refresh on respawn). Default 10.")
     p.add_argument("--hp-floor", type=float, default=float(os.getenv("WARP_HP_FLOOR", "0.25")))
     p.add_argument("--tls", action="store_true",
                    help="Connect over wss:// (TLS). Reads 'tls' from client.yaml if set.")
@@ -565,6 +600,8 @@ def parse_args():
         args.train_room = cfg.get("train_room", args.train_room)
     if args.rest_hp == int(os.getenv("WARP_REST_HP", "95")):
         args.rest_hp = int(cfg.get("rest_hp", args.rest_hp))
+    if args.look_interval == int(os.getenv("WARP_LOOK_INTERVAL", "10")):
+        args.look_interval = int(cfg.get("look_interval", args.look_interval))
     if args.hp_floor == float(os.getenv("WARP_HP_FLOOR", "0.25")):
         args.hp_floor = float(cfg.get("hp_floor", args.hp_floor))
     if args.script == os.getenv("WARP_SCRIPT",
