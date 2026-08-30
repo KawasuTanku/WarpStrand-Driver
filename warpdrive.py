@@ -338,8 +338,27 @@ class Driver:
             low = text.lower()
             LOOT_WORDS = ("loot", "drop", "gain", "receive", "found", "obtain",
                           "xp", "gold", "you get", "picked up")
-            if "dies" in low or "slain" in low:
+            if "dies" in low or "slain" in low or "slay" in low:
                 print(f"[kill] {text}")
+                # The server does NOT push a `room` refresh on death -- only on
+                # an explicit look/move -- so self.creatures keeps the dead mob
+                # forever. That makes the respawn watcher log "already present"
+                # every tick (never re-probes) and lets the kill rule re-fire on
+                # a corpse. Drop the dead mob(s) from the local list now so the
+                # watcher can re-detect the respawn via its periodic look.
+                removed = []
+                keep = []
+                for c in self.creatures:
+                    name = c.get("name") if isinstance(c, dict) else (
+                        c if isinstance(c, str) else "")
+                    if name and name.lower() in low:
+                        removed.append(name)
+                    else:
+                        keep.append(c)
+                if removed:
+                    self.creatures = keep
+                    print(f"[respawn] {', '.join(removed)} removed from local "
+                          f"list on death; watcher will re-probe")
             elif "shard" in low:
                 # Capacity Shard is a special/universal drop (the only way to
                 # expand the storage ring) -- highlight it distinctly.
@@ -802,4 +821,10 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        # Ctrl-C cancels the `async for` over the socket; asyncio.run then
+        # re-raises KeyboardInterrupt. Swallow it like the server's run() does
+        # so we exit cleanly instead of dumping a stack trace.
+        print("\n[stopped] interrupted (Ctrl-C)")
