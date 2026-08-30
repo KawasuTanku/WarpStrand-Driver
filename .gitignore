@@ -1,0 +1,17 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+
+# Runtime artifacts (player-specific, local only)
+map.*.json
+client.yaml
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store

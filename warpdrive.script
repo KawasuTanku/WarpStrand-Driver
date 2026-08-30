@@ -1,0 +1,23 @@
+# warpdrive.script — rules evaluated top-to-bottom each tick (first match wins).
+# Conditions: in "Room" | has-stat-points | mob "Name" | hp-below N | hp-above N | always
+# Actions:    train str con dex | goto "Room" | kill "Mob" | retreat "Room" |
+#             rest | retreat-rest "Room" | say "text" | look
+#
+# Order matters: put the survival rules FIRST so they override fighting.
+
+# 1) Survival: if HP is critically low, run home and rest to recover.
+when hp-below 15 do retreat-rest "Town Square"
+
+# 2) While resting at home with low HP, keep resting until reasonably healed.
+when in "Town Square" and hp-below 80 do rest
+
+# 3) Train stats whenever we're in Town Square and have points banked.
+when in "Town Square" and has-stat-points do train str con dex
+
+# 4) Fight the target mob if it's here and we're healthy enough.
+when mob "Cave Wyrm" and hp-above 25 do kill "Cave Wyrm"
+
+# Otherwise head to the mob's room (BFS over the discovered map).
+# Cave Wyrm lives in the Cave (room 9) in the build_world.py layout; adjust to
+# match your world's mob spawn if you use a different seed.
+when always do goto "Cave"

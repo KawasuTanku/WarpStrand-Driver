@@ -1,0 +1,9 @@
+[project]
+name = "WarpStrand-Driver"
+version = "0.1.0"
+description = "Standalone, rules-driven auto-player for the WarpStrand MUD server."
+requires-python = ">=3.10"
+dependencies = [
+    "websockets>=12.0",
+    "PyYAML>=6.0",
+]

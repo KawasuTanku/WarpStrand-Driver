@@ -1,0 +1,16 @@
+# Example WarpStrand-Driver config.
+# Copy to ~/.config/warpstrand/client.yaml (or pass with --config <path>).
+# All fields are optional; any omitted field falls back to a CLI flag / env var
+# / built-in default. The driver shares this file with the WarpStrand TUI client.
+
+host: 127.0.0.1
+port: 4000
+name: ""          # auto-login username (leave empty to pass via CLI/env)
+password: ""      # auto-login password
+# theme: warpstrand_client/bloodmud.yaml   # ignored by the driver
+
+# --- warpdrive.py extras (optional; CLI/env also work) ---
+# mob: Cave Wyrm
+# train_room: Town Square
+# hp_floor: 0.25
+# script: warpdrive.script
