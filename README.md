@@ -19,6 +19,27 @@ rules script you control — no TUI pane-scraping, just the server protocol.
   (host/port/name/password), the same file the TUI client uses. CLI flags and
   env vars override.
 
+## Split-screen TUI wrapper
+
+`warpwrap.py` wraps the driver in a Textual split-screen UI so you can watch it
+run:
+
+- **Left pane** — live player panel: room, level, XP, gold, STR/CON/DEX/MAG,
+  unspent stat points, and HP. Refreshes 4×/sec from the server's `stats` push.
+- **Right pane** — the driver's normal `[act]`/`[map]`/`[rest]`… log output,
+  captured by redirecting `print` into a scrollback.
+
+The driver itself is unchanged — `warpwrap` just runs `warpdrive.Driver` as a
+worker on the app's event loop and steers its output into widgets. Usage is
+identical to `warpdrive.py`:
+
+```bash
+python warpwrap.py --host ... --port ... --name ... --password ...
+```
+
+Quit with `q` or Ctrl-C. Adding the TUI pulls in `textual` (already in
+`requirements.txt` / `pyproject.toml`).
+
 ## Install
 
 ```bash
