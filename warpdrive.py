@@ -764,10 +764,20 @@ class Driver:
             have = int(self.stats.get("stat_points", 0) or 0)
             if have == self._trained_points:
                 return  # already trained this bank; wait for more points
-            for stat in acts[1:]:
-                await self.send(f"train {stat}")
+            stats = acts[1:] or ["str", "con", "dex"]
+            # Keep the listed stats BALANCED: spend one point at a time on
+            # whichever is currently lowest (ties broken by script order),
+            # instead of blindly training every stat once. This converges
+            # str/con/dex toward equal values as points accumulate.
+            cur = {s: int(self.stats.get(s, 0) or 0) for s in stats}
+            spent = []
+            for _ in range(have):
+                pick = min(stats, key=lambda s: cur[s])
+                await self.send(f"train {pick}")
+                cur[pick] += 1
+                spent.append(pick)
             self._trained_points = have
-            print(f"[act] train {acts[1:]} ({have} pts)")
+            print(f"[act] train balanced {stats} -> {spent} ({have} pts)")
         elif verb == "goto" or verb == "retreat":
             # Never walk away while we believe we're resting: leaving cancels the
             # server's rest (and its heal), and we'd just bounce back — freezing HP.
