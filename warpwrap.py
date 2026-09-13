@@ -114,9 +114,10 @@ class StatsPanel(Static):
     }
     """
 
-    def __init__(self, get_driver, **kwargs) -> None:
+    def __init__(self, get_driver, theme_source=None, **kwargs) -> None:
         super().__init__(**kwargs)
         self._get_driver = get_driver
+        self._get_theme_source = theme_source or (lambda: "unknown")
 
     def render(self) -> str:
         d = self._get_driver()
@@ -129,6 +130,7 @@ class StatsPanel(Static):
         room = d.map.current or "?"
         return (
             f"[b]{name}[/b]\n"
+            f"Theme : {self._get_theme_source()}\n"
             f"Room : {room}\n"
             f"Level: {s.get('level', '?')}\n"
             f"XP   : {s.get('xp', '?')}\n"
@@ -169,6 +171,7 @@ class WarpWrap(App):
         if env_theme is not None:
             self.register_theme(env_theme)
             self.theme = env_theme.name
+            self._theme_source = f"TankuOS ({os.environ.get('TANKUOS_THEME', '?')})"
             return
         # Standalone fallback: map name to a built-in Textual theme.
         theme = os.environ.get("TANKUOS_THEME", "").lower().strip()
@@ -180,12 +183,14 @@ class WarpWrap(App):
             "osaka-jade": "textual-dark",
         }
         self.theme = mapping.get(theme, "textual-dark")
+        self._theme_source = f"standalone ({self.theme})"
 
     def __init__(self) -> None:
         super().__init__()
         self._game_driver: "warpdrive.Driver | None" = None
         self._orig_print = builtins.print
         self._running = True
+        self._theme_source = "unknown"
 
     # ---- stats snapshot accessor (passed into StatsPanel) ----
     def _get_driver(self) -> "warpdrive.Driver | None":
@@ -194,7 +199,7 @@ class WarpWrap(App):
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal(id="body"):
-            yield StatsPanel(self._get_driver, id="left")
+            yield StatsPanel(self._get_driver, theme_source=lambda: self._theme_source, id="left")
             yield RichLog(id="log", wrap=True, markup=False)
         yield Footer()
 
