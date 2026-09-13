@@ -26,10 +26,68 @@ import textual
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal
 from textual.message import Message
+from textual.theme import Theme
 from textual.widgets import Footer, Header, RichLog, Static
 from textual.worker import Worker, WorkerState
 
 import warpdrive
+
+
+def _parse_rgb(val: str) -> tuple[int, int, int] | None:
+    """Parse 'R,G,B' into a (r, g, b) tuple, or None on malformed input."""
+    parts = val.split(",")
+    if len(parts) != 3:
+        return None
+    try:
+        r, g, b = int(parts[0]), int(parts[1]), int(parts[2])
+        if 0 <= r <= 255 and 0 <= g <= 255 and 0 <= b <= 255:
+            return r, g, b
+    except ValueError:
+        pass
+    return None
+
+
+def _read_tankuos_palette() -> dict[str, tuple[int, int, int]] | None:
+    """Read TankuOS palette from env vars. Returns None if any are missing."""
+    names = ("BG", "PANEL", "FG", "ACCENT", "SECONDARY", "ERROR")
+    result = {}
+    for n in names:
+        val = _parse_rgb(os.environ.get(f"TANKUOS_THEME_{n}", ""))
+        if val is None:
+            return None
+        result[n.lower()] = val
+    return result
+
+
+def _theme_from_env() -> Theme | None:
+    """Build a Theme from TankuOS palette env vars.
+
+    Returns None when not running under TankuOS (env vars unset/malformed),
+    falling back to the caller's default theme selection.
+    """
+    p = _read_tankuos_palette()
+    if p is None:
+        return None
+    bg, panel, fg = p["bg"], p["panel"], p["fg"]
+    accent, secondary, error = p["accent"], p["secondary"], p["error"]
+
+    def hx(t: tuple[int, int, int]) -> str:
+        return f"#{t[0]:02x}{t[1]:02x}{t[2]:02x}"
+
+    return Theme(
+        name="tankuos-runtime",
+        primary=hx(accent),
+        secondary=hx(secondary),
+        surface=hx(bg),
+        panel=hx(panel),
+        background=hx(bg),
+        foreground=hx(fg),
+        accent=hx(accent),
+        error=hx(error),
+        success="#6ec86e",
+        warning="#e5c07b",
+        dark=True,
+    )
 
 # Left-panel width as a fraction of the terminal. Tune to taste.
 LEFT_FRACTION = "34%"
@@ -99,6 +157,30 @@ class WarpWrap(App):
     RichLog#log {{ padding: 0 1; }}
     """
 
+    def _apply_theme(self) -> None:
+        """Apply TankuOS palette at runtime if available, else fall back.
+
+        1. Try TANKUOS_THEME_* env vars from ptyhost → register and use custom
+           theme that matches the active TankuOS palette exactly.
+        2. Fall back to name→builtin mapping when running standalone (no
+           TANKUOS_THEME_* env vars present).
+        """
+        env_theme = _theme_from_env()
+        if env_theme is not None:
+            self.register_theme(env_theme)
+            self.theme = env_theme.name
+            return
+        # Standalone fallback: map name to a built-in Textual theme.
+        theme = os.environ.get("TANKUOS_THEME", "").lower().strip()
+        mapping = {
+            "midnight": "textual-dark",
+            "nord": "nord",
+            "gruvbox": "gruvbox",
+            "dracula": "dracula",
+            "osaka-jade": "textual-dark",
+        }
+        self.theme = mapping.get(theme, "textual-dark")
+
     def __init__(self) -> None:
         super().__init__()
         self._game_driver: "warpdrive.Driver | None" = None
@@ -117,6 +199,8 @@ class WarpWrap(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        # Apply theme based on TANKuOS env var
+        self._apply_theme()
         # Periodically repaint the left panel from the driver's stats.
         self.set_interval(0.25, self._refresh_stats)
         # Redirect the driver's prints into the log pane.

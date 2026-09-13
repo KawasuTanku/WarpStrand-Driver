@@ -879,10 +879,8 @@ class Driver:
 
 
 def _load_config(path: str | None) -> dict:
-    """Load client settings from YAML (same schema as the TUI client's
-    ~/.config/warpstrand/client.yaml: host/port/name/password, optional
-    mob/train_room/hp_floor/script). Self-contained: uses PyYAML only, no
-    dependency on the WarpStrand-Client package."""
+    """Load client settings from YAML. Uses XDG_CONFIG_HOME if set,
+    otherwise falls back to ~/.config/warpstrand/client.yaml."""
     import yaml
     if path is None:
         base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(

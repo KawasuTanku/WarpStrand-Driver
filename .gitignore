@@ -9,6 +9,8 @@ build/
 # Runtime artifacts (player-specific, local only)
 map.*.json
 client.yaml
+output.log
+.tankuos-meta.json
 
 # Editor / OS
 .vscode/
